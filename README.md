@@ -54,6 +54,9 @@ broadcast-rcon-to-ops=true
 | `log_server_port` | 日志服务器端口 | `25576` |
 | `enable_chat_response` | 将LLM响应发送回MC聊天框 | `true` |
 | `bot_nickname` | 在MC中显示的机器人昵称 | `"Bot"` |
+| `enable_unified_context` | 启用MC和QQ群的统一上下文 | `false` |
+| `unified_group_umo` | 统一上下文目标群UMO | `""` |
+| `mc_message_prefix` | MC消息在统一上下文中的前缀 | `"[MC]"` |
 
 配置示例：
 ```json
@@ -67,7 +70,10 @@ broadcast-rcon-to-ops=true
   "log_server_host": "127.0.0.1",
   "log_server_port": 25576,
   "enable_chat_response": true,
-  "bot_nickname": "MC助手"
+  "bot_nickname": "MC助手",
+  "enable_unified_context": false,
+  "unified_group_umo": "",
+  "mc_message_prefix": "[MC]"
 }
 ```
 
@@ -95,6 +101,56 @@ broadcast-rcon-to-ops=true
 - QQ消息：使用QQ号校验（如 `"123456789"`）
 - MC消息：使用玩家名校验（如 `"Steve"`）
 - 系统会自动识别消息来源并应用对应的权限规则
+
+### 4. 统一会话上下文（高级功能）
+
+启用后，MC游戏内聊天和指定QQ群可以共享同一个对话上下文，实现跨平台无缝交流。
+
+**功能特性**：
+- 🔗 **统一上下文**：MC玩家和QQ群成员在同一对话中交流
+- 🤖 **双向感知**：LLM能同时看到MC和QQ的消息历史
+- 🎯 **定向推送**：支持将MC事件推送到指定QQ群
+- 🛠️ **工具支持**：提供 `send_to_qq_group` 工具，让LLM主动向QQ群发送消息
+
+**配置步骤**：
+
+1. **获取QQ群UMO**：
+   - 在目标QQ群中发送任意消息
+   - 在AstrBot后台日志中查找类似 `aiocqhttp_default:GroupMessage:123456789` 的UMO字符串
+   - 格式说明：`平台ID:消息类型:群号`
+
+2. **启用统一上下文**：
+   ```json
+   {
+     "enable_log_monitor": true,
+     "enable_unified_context": true,
+     "unified_group_umo": "aiocqhttp_default:GroupMessage:123456789",
+     "mc_message_prefix": "[MC]"
+   }
+   ```
+
+3. **工作原理**：
+   - 所有MC聊天消息会自动提交到AstrBot的指定QQ群会话
+   - MC消息会带有发送者昵称（如 `Steve(MC)`）
+   - LLM能看到完整的MC和QQ混合对话历史
+   - MC系统事件（登入、登出、成就、死亡）也会记录到会话上下文
+   - LLM可使用 `send_to_qq_group` 工具主动向QQ群发送消息
+
+**使用示例**：
+
+```
+[QQ群] 用户A: @Bot 服务器现在有多少人在线？
+[MC] Steve: 有3个人，但是Alex好像挂机了
+[QQ群] Bot: 当前在线3人：Steve、Alex、Notch。根据Steve的反馈，Alex可能在挂机。
+[MC] Alex: 我没挂机！我在挖矿呢
+[QQ群] Bot: 好的，Alex说他在挖矿，并没有挂机。
+```
+
+**注意事项**：
+- 统一上下文需要先启用日志监控（`enable_log_monitor: true`）
+- `unified_group_umo` 必须填写正确的UMO格式
+- MC消息前缀可自定义，用于在QQ群中区分消息来源
+- 所有MC消息都会提交到指定QQ群的会话上下文，由AstrBot的 `wake_prefix` 控制是否唤醒LLM
 
 ## 📖 使用方法
 
@@ -165,6 +221,12 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 ### 🆕 脚本执行器
 - ✅ 执行Python脚本（execute_script）🔒
 - ✅ 列出可用工具（list_script_tools）🆓
+
+### 🔗 统一上下文工具
+- ✅ 发送消息到QQ群（send_to_qq_group）🔒
+  - 需要启用统一上下文功能
+  - 允许LLM主动向配置的QQ群发送消息
+  - 可用于向QQ群推送MC服务器事件或状态
 
 **图标说明：**
 - 🔒 需要管理员权限
@@ -260,6 +322,19 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 3. 查看AstrBot日志获取详细错误信息
 
 ## 📝 更新日志
+
+### v1.2.0
+- ✨ 新增统一会话上下文功能
+  - 支持MC游戏内聊天和QQ群共享对话上下文
+  - LLM可同时感知MC和QQ的消息历史
+  - 新增 `send_to_qq_group` 工具，LLM可主动向QQ群发送消息
+  - MC系统事件（登入、登出、成就、死亡）自动记录到上下文
+- 🔧 优化消息处理
+  - 改进MC消息提交机制，支持与AstrBot唤醒词无缝集成
+  - 过滤Agent多轮调用的中间响应，避免发送无效内容到MC
+- 📚 文档完善
+  - 添加统一会话上下文配置和使用说明
+  - 完善UMO获取和配置步骤
 
 ### v1.1.0
 - ✨ 新增脚本执行器功能
