@@ -6,23 +6,23 @@
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from ..rcon_client import MinecraftRCON
+    from ..mcdr_client import MCDRBridgeClient
 
 
-# 全局RCON客户端引用
-_rcon: "MinecraftRCON" = None
+# 全局命令客户端引用
+_rcon: "MCDRBridgeClient" = None
 
 
-def set_rcon(rcon: "MinecraftRCON"):
-    """设置RCON客户端"""
+def set_rcon(rcon: "MCDRBridgeClient"):
+    """设置命令客户端"""
     global _rcon
     _rcon = rcon
 
 
-def get_rcon() -> "MinecraftRCON":
-    """获取RCON客户端"""
+def get_rcon() -> "MCDRBridgeClient":
+    """获取命令客户端"""
     if _rcon is None:
-        raise RuntimeError("RCON客户端未初始化")
+        raise RuntimeError("命令客户端未初始化")
     return _rcon
 
 

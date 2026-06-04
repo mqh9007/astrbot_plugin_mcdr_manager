@@ -4,25 +4,26 @@
 """
 
 from typing import TYPE_CHECKING, Optional
+from .player_aliases import resolve_player_name
 
 if TYPE_CHECKING:
-    from ..rcon_client import MinecraftRCON
+    from ..mcdr_client import MCDRBridgeClient
 
 
-# 全局RCON客户端引用，由main.py注入
-_rcon: "MinecraftRCON" = None
+# 全局命令客户端引用，由main.py注入
+_rcon: "MCDRBridgeClient" = None
 
 
-def set_rcon(rcon: "MinecraftRCON"):
-    """设置RCON客户端"""
+def set_rcon(rcon: "MCDRBridgeClient"):
+    """设置命令客户端"""
     global _rcon
     _rcon = rcon
 
 
-def get_rcon() -> "MinecraftRCON":
-    """获取RCON客户端"""
+def get_rcon() -> "MCDRBridgeClient":
+    """获取命令客户端"""
     if _rcon is None:
-        raise RuntimeError("RCON客户端未初始化")
+        raise RuntimeError("命令客户端未初始化")
     return _rcon
 
 
@@ -42,6 +43,7 @@ async def give_item(player: str, item: str, count: int = 1) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     # 确保物品ID格式正确
     if not item.startswith("minecraft:"):
         item = f"minecraft:{item}"
@@ -65,6 +67,8 @@ async def teleport_player(player: str, target: str) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
+    target = resolve_player_name(target)
     result = await rcon.execute_async(f"tp {player} {target}")
     return f"传送 {player} 到 {target}: {result}"
 
@@ -81,6 +85,7 @@ async def set_gamemode(player: str, mode: str) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     
     # 标准化游戏模式名称
     mode_map = {
@@ -110,6 +115,7 @@ async def kill_entity(target: str) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    target = resolve_player_name(target)
     result = await rcon.execute_async(f"kill {target}")
     return f"杀死 {target}: {result}"
 
@@ -126,6 +132,7 @@ async def clear_inventory(player: str, item: Optional[str] = None) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     
     if item:
         if not item.startswith("minecraft:"):
@@ -151,6 +158,7 @@ async def set_experience(player: str, amount: int, operation: str = "set", unit:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     
     # 验证操作类型
     if operation.lower() not in ["set", "add"]:

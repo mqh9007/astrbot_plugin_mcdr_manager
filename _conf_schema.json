@@ -1,21 +1,39 @@
 {
-  "rcon_host": {
+  "mcdr_host": {
     "type": "string",
-    "title": "RCON主机地址",
-    "description": "Minecraft服务器的IP地址或域名",
-    "default": "localhost"
+    "title": "MCDR桥接地址",
+    "description": "运行AstrBot桥接MCDR插件的主机地址",
+    "default": "127.0.0.1"
   },
-  "rcon_port": {
+  "mcdr_port": {
     "type": "int",
-    "title": "RCON端口",
-    "description": "Minecraft服务器的RCON端口（默认25575）",
-    "default": 25575
+    "title": "MCDR桥接端口",
+    "description": "AstrBot桥接MCDR插件监听的端口号",
+    "default": 25576
   },
-  "rcon_password": {
+  "mcdr_token": {
     "type": "string",
-    "title": "RCON密码",
-    "description": "Minecraft服务器的RCON密码",
+    "title": "MCDR桥接Token",
+    "description": "连接MCDR桥接插件的鉴权Token。留空表示不鉴权，建议公网或跨机器部署时填写",
     "default": ""
+  },
+  "mcdr_reconnect_interval": {
+    "type": "int",
+    "title": "MCDR桥接重连间隔",
+    "description": "与MCDR桥接断开连接后自动重连的时间间隔（秒），设为0禁用自动重连",
+    "default": 10
+  },
+  "mcdr_max_reconnect_attempts": {
+    "type": "int",
+    "title": "MCDR桥接最大重连次数",
+    "description": "自动重连的最大尝试次数，设为0表示无限重试",
+    "default": 0
+  },
+  "mcdr_command_timeout": {
+    "type": "int",
+    "title": "MCDR命令超时",
+    "description": "等待MCDR桥接插件返回命令执行结果的超时时间（秒）",
+    "default": 10
   },
   "admin_ids": {
     "type": "list",
@@ -23,46 +41,26 @@
     "description": "允许使用此插件的QQ号/MC账号(填游戏名)列表，留空表示所有人可用",
     "default": []
   },
+  "player_aliases": {
+    "type": "dict",
+    "title": "玩家别名",
+    "description": "MC玩家真实游戏ID到别名列表的映射，例如 {\"doubiev\": [\"豆包\", \"小豆\"]}。玩家相关工具会自动把别名解析为真实游戏ID",
+    "hint": "键为真实MC游戏ID，值为别名字符串列表。建议使用JSON编辑器维护。",
+    "items": {},
+    "editor_mode": true,
+    "editor_language": "json",
+    "default": {}
+  },
   "enable_dangerous_commands": {
     "type": "bool",
     "title": "启用危险命令",
     "description": "是否启用stop等危险命令",
     "default": false
   },
-  "enable_log_monitor": {
-    "type": "bool",
-    "title": "启用日志监控",
-    "description": "是否启用Minecraft服务器日志实时监控功能",
-    "default": false
-  },
-  "log_server_host": {
-    "type": "string",
-    "title": "日志服务器地址",
-    "description": "日志服务器的IP地址（运行log_server.py的机器）",
-    "default": "127.0.0.1"
-  },
-  "log_server_port": {
-    "type": "int",
-    "title": "日志服务器端口",
-    "description": "日志服务器监听的端口号",
-    "default": 25576
-  },
-  "log_reconnect_interval": {
-    "type": "int",
-    "title": "日志服务器重连间隔",
-    "description": "与日志服务器断开连接后，自动重连的时间间隔（秒），设为0禁用自动重连",
-    "default": 10
-  },
-  "log_max_reconnect_attempts": {
-    "type": "int",
-    "title": "最大重连次数",
-    "description": "自动重连的最大尝试次数，设为0表示无限重试",
-    "default": 0
-  },
   "enable_chat_response": {
     "type": "bool",
     "title": "启用聊天响应",
-    "description": "是否将LLM的响应发送回MC聊天框（需要启用日志监控）。注意：所有MC消息会提交到AstrBot框架，由AstrBot的wake_prefix配置控制是否调用LLM",
+    "description": "是否将LLM的响应通过MCDR发送回MC聊天框。所有MC消息会提交到AstrBot框架，由AstrBot的wake_prefix配置控制是否调用LLM",
     "default": true
   },
   "bot_nickname": {

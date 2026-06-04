@@ -4,18 +4,19 @@
 """
 
 from typing import TYPE_CHECKING
+from .player_aliases import resolve_command_aliases, resolve_player_name
 
 if TYPE_CHECKING:
-    from ..rcon_client import MinecraftRCON
+    from ..mcdr_client import MCDRBridgeClient
 
 
-# 全局RCON客户端引用和配置
-_rcon: "MinecraftRCON" = None
+# 全局命令客户端引用和配置
+_rcon: "MCDRBridgeClient" = None
 _enable_dangerous_commands: bool = False
 
 
-def set_rcon(rcon: "MinecraftRCON"):
-    """设置RCON客户端"""
+def set_rcon(rcon: "MCDRBridgeClient"):
+    """设置命令客户端"""
     global _rcon
     _rcon = rcon
 
@@ -26,10 +27,10 @@ def set_dangerous_commands_enabled(enabled: bool):
     _enable_dangerous_commands = enabled
 
 
-def get_rcon() -> "MinecraftRCON":
-    """获取RCON客户端"""
+def get_rcon() -> "MCDRBridgeClient":
+    """获取命令客户端"""
     if _rcon is None:
-        raise RuntimeError("RCON客户端未初始化")
+        raise RuntimeError("命令客户端未初始化")
     return _rcon
 
 
@@ -77,6 +78,7 @@ async def tellraw(message: str, sender: str = "Bot", color: str = "yellow", targ
         执行结果信息
     """
     rcon = get_rcon()
+    target = resolve_player_name(target)
     
     # 转义消息中的特殊字符
     message = message.replace('"', '\\"')
@@ -106,6 +108,7 @@ async def title(title_text: str, subtitle_text: str = "", color: str = "white", 
         执行结果信息
     """
     rcon = get_rcon()
+    target = resolve_player_name(target)
     
     # 转义文本中的特殊字符
     title_text = title_text.replace('"', '\\"')
@@ -201,6 +204,7 @@ async def execute_command(command: str) -> str:
         命令执行结果
     """
     rcon = get_rcon()
+    command = resolve_command_aliases(command)
     
     # 检查危险命令
     dangerous_commands = ["stop", "ban-ip"]

@@ -1,13 +1,14 @@
-# AstrBot MC服务器管理插件
+# AstrBot MCDR服务器管理插件
 
-通过LLM智能管理Minecraft服务器的AstrBot插件。支持Fabric、Forge、NeoForge等所有使用标准RCON协议的服务器。
+通过LLM智能管理Minecraft服务器的AstrBot插件。现在通过 MCDR 桥接插件与服务器联动，不再需要 AstrBot 直接连接 MC 原生 RCON，也不需要在 MC 服务器侧运行额外的聊天日志截获脚本。
 
 ## ✨ 功能特性
 
 - 🤖 **自然语言交互**：无需命令前缀，直接与LLM对话即可管理服务器
 - 🎮 **全面管理**：支持玩家管理、游戏操作、服务器管理、世界操作等功能
+- 🏷️ **玩家别名**：支持为一个MC游戏ID配置多个别名，LLM工具会自动解析
 - 🔒 **权限控制**：支持管理员白名单，确保服务器安全
-- 🌐 **跨平台兼容**：基于RCON协议，支持Fabric、Forge、NeoForge等各种服务端
+- 🌐 **MCDR联动**：通过 MCDR 插件接收聊天/事件并代发服务器命令
 
 ## 📦 安装
 
@@ -15,7 +16,7 @@
 
 1. 打开AstrBot管理面板
 2. 进入「插件管理」
-3. 搜索 `mc_manager`
+3. 搜索 `astrbot_plugin_mcdr_manager`
 4. 点击安装
 
 ### 方法二：手动安装
@@ -25,18 +26,29 @@
 
 ## ⚙️ 配置
 
-### 1. Minecraft服务器配置
+### 1. 安装MCDR桥接插件
 
-在您的MC服务器 `server.properties` 文件中启用RCON：
+本仓库只包含 AstrBot 插件代码。配套的 MCDR 桥接插件请单独放在 MCDR 的插件目录中，不要放进 AstrBot 插件目录。放好后在 MCDR 控制台执行：
 
-```properties
-enable-rcon=true
-rcon.port=25575
-rcon.password=your_secure_password
-broadcast-rcon-to-ops=true
+```text
+!!MCDR reload plugin
 ```
 
-**重要**：修改后需要重启MC服务器。
+首次加载后，MCDR 会生成配置文件 `config/astrbot_mc_bridge/config.json`：
+
+```json
+{
+  "host": "127.0.0.1",
+  "port": 25576,
+  "token": "",
+  "heartbeat_interval": 10,
+  "client_timeout": 30,
+  "use_rcon_query": true,
+  "command_timeout": 8
+}
+```
+
+如果 AstrBot 与 MCDR 不在同一台机器，把 `host` 改为 `0.0.0.0`，并建议设置 `token`。
 
 ### 2. 插件配置
 
@@ -44,14 +56,15 @@ broadcast-rcon-to-ops=true
 
 | 配置项 | 说明 | 默认值 |
 |--------|------|--------|
-| `rcon_host` | MC服务器地址 | `localhost` |
-| `rcon_port` | RCON端口 | `25575` |
-| `rcon_password` | RCON密码 | - |
+| `mcdr_host` | MCDR桥接插件地址 | `127.0.0.1` |
+| `mcdr_port` | MCDR桥接插件端口 | `25576` |
+| `mcdr_token` | MCDR桥接Token，需与MCDR插件配置一致 | `""` |
+| `mcdr_reconnect_interval` | MCDR桥接重连间隔 | `10` |
+| `mcdr_max_reconnect_attempts` | MCDR桥接最大重连次数，0表示无限 | `0` |
+| `mcdr_command_timeout` | 命令等待超时时间 | `10` |
 | `admin_ids` | 管理员ID列表（QQ号或MC玩家名） | `[]`（空表示所有人可用） |
+| `player_aliases` | 玩家别名映射，真实游戏ID对应多个别名 | `{}` |
 | `enable_dangerous_commands` | 启用危险命令（如stop） | `false` |
-| `enable_log_monitor` | 启用MC日志监控 | `false` |
-| `log_server_host` | 日志服务器地址 | `127.0.0.1` |
-| `log_server_port` | 日志服务器端口 | `25576` |
 | `enable_chat_response` | 将LLM响应发送回MC聊天框 | `true` |
 | `bot_nickname` | 在MC中显示的机器人昵称 | `"Bot"` |
 | `enable_unified_context` | 启用MC和QQ群的统一上下文 | `false` |
@@ -61,14 +74,15 @@ broadcast-rcon-to-ops=true
 配置示例：
 ```json
 {
-  "rcon_host": "127.0.0.1",
-  "rcon_port": 25575,
-  "rcon_password": "your_password",
+  "mcdr_host": "127.0.0.1",
+  "mcdr_port": 25576,
+  "mcdr_token": "",
   "admin_ids": ["123456789", "Steve", "Alex"],
+  "player_aliases": {
+    "doubiev": ["豆包", "小豆", "豆比"],
+    "Steve": ["史蒂夫"]
+  },
   "enable_dangerous_commands": false,
-  "enable_log_monitor": true,
-  "log_server_host": "127.0.0.1",
-  "log_server_port": 25576,
   "enable_chat_response": true,
   "bot_nickname": "MC助手",
   "enable_unified_context": false,
@@ -77,21 +91,40 @@ broadcast-rcon-to-ops=true
 }
 ```
 
-### 3. MC游戏内聊天支持（可选）
+### 玩家别名
 
-如果启用 `enable_log_monitor`，可以在MC游戏内直接与机器人对话：
+`player_aliases` 用真实 MC 游戏ID作为键，值为该玩家的别名列表。配置后，玩家相关工具会自动把别名解析为真实游戏ID。
 
-1. **在MC服务器机器上运行日志服务器**：
-   ```bash
-   python log_server.py（注意，请自行修改代码文件配置参数）
-   ```
+例如玩家游戏ID为 `doubiev`：
 
-2. **配置权限**：
+```json
+{
+  "player_aliases": {
+    "doubiev": ["豆包", "小豆", "豆比"]
+  }
+}
+```
+
+之后可以直接说：
+
+```text
+把豆包传送到Alex旁边
+给小豆64个钻石
+把豆比切成创造模式
+```
+
+这些请求会自动按 `doubiev` 执行。支持别名解析的工具包括玩家管理、物品给予、传送、游戏模式、清背包、经验、`tellraw/title` 的目标玩家，以及 `execute_command` 中按空格分隔的简单玩家名 token。可以询问“列出玩家别名”让机器人调用 `list_player_aliases` 查看当前配置。
+
+### 3. MC游戏内聊天支持
+
+安装并连接 MCDR 桥接插件后，可以在MC游戏内直接与机器人对话：
+
+1. **配置权限**：
    - `admin_ids` 中添加MC玩家名即可授予权限(你游戏名是啥就填啥)
    - 例如：`"admin_ids": ["Steve", "Alex"]` 允许这两个MC玩家执行管理命令
    - 格式：MC玩家的user_id为 `mc_player_{玩家名}`
 
-3. **在MC中使用**：
+2. **在MC中使用**：
    - 所有MC聊天消息都会提交到AstrBot，LLM会看到完整的聊天上下文
    - 唤醒词在AstrBot的 `wake_prefix` 配置中统一管理（如 `"wake_prefix": ["小面包"]`）
    - 只有包含唤醒词的消息才会触发LLM回复
@@ -122,7 +155,6 @@ broadcast-rcon-to-ops=true
 2. **启用统一上下文**：
    ```json
    {
-     "enable_log_monitor": true,
      "enable_unified_context": true,
      "unified_group_umo": "aiocqhttp_default:GroupMessage:123456789",
      "mc_message_prefix": "[MC]"
@@ -147,7 +179,7 @@ broadcast-rcon-to-ops=true
 ```
 
 **注意事项**：
-- 统一上下文需要先启用日志监控（`enable_log_monitor: true`）
+- 统一上下文需要 MCDR 桥接连接正常
 - `unified_group_umo` 必须填写正确的UMO格式
 - MC消息前缀可自定义，用于在QQ群中区分消息来源
 - 所有MC消息都会提交到指定QQ群的会话上下文，由AstrBot的 `wake_prefix` 控制是否唤醒LLM
@@ -209,6 +241,7 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 - ✅ 查看白名单（whitelist list）🆓
 - ✅ 查看封禁列表（banlist）🆓
 - ✅ 执行自定义命令（execute_command）🔒
+- ✅ 查看玩家别名（list_player_aliases）🆓
 - ⚠️ 停止服务器（stop）🔒 - 需启用危险命令
 
 ### 世界操作
@@ -282,46 +315,46 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 
 ##  安全建议
 
-1. **设置强密码**：RCON密码应该使用强密码
+1. **设置桥接Token**：跨机器部署或非本机监听时，请在 MCDR 插件和 AstrBot 插件中配置相同的 `token`
 2. **限制管理员**：在 `admin_ids` 中明确指定可以使用的用户
 3. **生产环境必须配置管理员列表**：不要留空 `admin_ids`
 4. **禁用危险命令**：保持 `enable_dangerous_commands` 为 `false`，除非确实需要
-5. **防火墙配置**：如果MC服务器和AstrBot不在同一台机器，确保RCON端口的安全
+5. **防火墙配置**：如果MCDR和AstrBot不在同一台机器，只放行 MCDR 桥接端口
 6. **谨慎使用脚本执行器**：`execute_script` 可以调用任何已注册工具，请仅授予信任用户
 
 ## 🔧 故障排除
 
 ### 连接失败
 
-**如何开启RCON：**
-
-1. **找到服务器配置文件**：在MC服务器根目录找到 `server.properties` 文件
-2. **编辑配置文件**：使用文本编辑器打开，添加或修改以下配置：
-   ```properties
-   enable-rcon=true
-   rcon.port=25575
-   rcon.password=your_secure_password
-   broadcast-rcon-to-ops=true
-   ```
-3. **设置安全密码**：将 `your_secure_password` 替换为强密码
-4. **重启服务器**：保存文件后，**必须重启MC服务器**才能生效
-5. **验证配置**：服务器启动后，查看日志确认 "RCON running on..." 字样
-
 **故障排查步骤：**
 
-1. 确认MC服务器已启动
-2. 确认 `server.properties` 中已启用RCON（`enable-rcon=true`）
-3. 确认端口号和密码正确
-4. 确认防火墙允许RCON端口
-5. 如果MC和AstrBot在不同机器，确认 `rcon_host` 设置为MC服务器的IP地址而非 `localhost`
+1. 确认 MCDR 已启动并加载 `astrbot_mc_bridge`
+2. 确认 MCDR 插件配置中的 `host` / `port` 与 AstrBot 的 `mcdr_host` / `mcdr_port` 一致
+3. 如果配置了 `token`，确认两边完全一致
+4. 如果 MCDR 和 AstrBot 在不同机器，确认 MCDR 插件 `host` 不是 `127.0.0.1`，并检查防火墙
+5. 在 AstrBot 中使用 `/test_connection` 测试桥接连接
 
 ### 命令无响应
 
 1. 检查AstrBot是否正确配置了LLM提供者
 2. 检查插件配置是否正确
 3. 查看AstrBot日志获取详细错误信息
+4. 如果命令没有返回详细输出，在 MCDR 插件配置中保持 `use_rcon_query: true` 并确保 MCDR 自身可用 RCON；否则桥接插件会退回到 `server.execute()`，命令会发出但只能返回“无返回信息”
 
 ## 📝 更新日志
+
+### v1.4.0
+- ✨ 新增玩家别名功能
+  - 支持在 `player_aliases` 中为一个MC游戏ID配置多个别名
+  - 玩家相关工具、脚本执行器工具和简单自定义命令会自动解析别名
+  - 新增 `list_player_aliases` 工具用于查看当前别名配置
+
+### v1.3.0
+- ✨ 改为 MCDR 桥接模式
+  - 新增 `mcdr_client.py`，AstrBot 侧通过 TCP 长连接连接 MCDR
+  - 新增配套 MCDR 单文件桥接插件，需与 AstrBot 插件分开部署
+  - MC聊天、玩家加入/离开、成就、死亡事件由 MCDR 直接推送
+  - 服务器命令通过 MCDR 桥接执行，不再要求 AstrBot 直连 MC 原生 RCON
 
 ### v1.2.0
 - ✨ 新增统一会话上下文功能

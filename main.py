@@ -9,16 +9,15 @@ from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import AstrBotConfig, logger
 from astrbot.core.provider.entities import LLMResponse
 
-from .rcon_client import MinecraftRCON
-from .tools import player_tools, game_tools, server_tools, world_tools
-from .log_client import LogClient
+from .tools import player_tools, game_tools, server_tools, world_tools, player_aliases
+from .mcdr_client import MCDRBridgeClient
 from .script_executor import ScriptExecutor
 
 
 @register(
-    name="mc_manager",
+    name="astrbot_plugin_mcdr_manager",
     desc="通过LLM智能管理Minecraft服务器",
-    version="1.0.0",
+    version="1.4.0",
     author="AstrBot Community"
 )
 class MCManagerPlugin(Star):
@@ -27,18 +26,24 @@ class MCManagerPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         
-        # 从配置加载RCON设置
+        # 从配置加载MCDR桥接设置
         self.config = config
         
-        # 初始化RCON客户端
-        self.rcon = MinecraftRCON(
-            host=self.config.get("rcon_host", "localhost"),
-            port=self.config.get("rcon_port", 25575),
-            password=self.config.get("rcon_password", "")
+        # 初始化MCDR桥接客户端。保留self.rcon命名以兼容现有工具模块的注入接口。
+        self.rcon = MCDRBridgeClient(
+            host=self.config.get("mcdr_host", "127.0.0.1"),
+            port=self.config.get("mcdr_port", 25576),
+            token=self.config.get("mcdr_token", ""),
+            reconnect_interval=self.config.get("mcdr_reconnect_interval", 10),
+            max_reconnect_attempts=self.config.get("mcdr_max_reconnect_attempts", 0),
+            command_timeout=self.config.get("mcdr_command_timeout", 10),
         )
         
         # 加载管理员列表
         self.admin_ids = set(self.config.get("admin_ids", []))
+
+        # 加载玩家别名配置，格式: {"游戏ID": ["别名1", "别名2"]}
+        self.player_aliases = self.config.get("player_aliases", {})
         
         # 是否启用危险命令
         self.enable_dangerous = self.config.get("enable_dangerous_commands", False)
@@ -57,56 +62,42 @@ class MCManagerPlugin(Star):
         self.unified_group_umo = self.config.get("unified_group_umo", "")
         self.mc_message_prefix = self.config.get("mc_message_prefix", "[MC]")
         
-        # 初始化日志客户端（如果启用）
-        self.log_client = None
-        enable_log = self.config.get("enable_log_monitor", False)
-        if enable_log:
-            log_host = self.config.get("log_server_host", "127.0.0.1")
-            log_port = self.config.get("log_server_port", 25576)
-            reconnect_interval = self.config.get("log_reconnect_interval", 10)
-            max_reconnect_attempts = self.config.get("log_max_reconnect_attempts", 0)
-            
-            # 所有MC消息都会提交到AstrBot，由框架的wake_prefix控制是否调用LLM
-            self.log_client = LogClient(
-                log_host,
-                log_port,
-                reconnect_interval=reconnect_interval,
-                max_reconnect_attempts=max_reconnect_attempts
-            )
-            self.log_client.set_chat_callback(self._on_player_chat)
-            self.log_client.set_fake_event_handler(self._send_fake_event)
-            self.log_client.set_disconnect_callback(self._on_log_disconnect)
-            self.log_client.set_reconnect_callback(self._on_log_reconnect)
-            self.log_client.set_player_join_callback(self._on_player_join)
-            self.log_client.set_player_leave_callback(self._on_player_leave)
-            self.log_client.set_player_advancement_callback(self._on_player_advancement)
-            self.log_client.set_player_death_callback(self._on_player_death)
+        # 所有MC消息都会由MCDR桥接提交到AstrBot，由框架的wake_prefix控制是否调用LLM
+        self.mcdr_client = self.rcon
+        self.mcdr_client.set_chat_callback(self._on_player_chat)
+        self.mcdr_client.set_fake_event_handler(self._send_fake_event)
+        self.mcdr_client.set_disconnect_callback(self._on_log_disconnect)
+        self.mcdr_client.set_reconnect_callback(self._on_log_reconnect)
+        self.mcdr_client.set_player_join_callback(self._on_player_join)
+        self.mcdr_client.set_player_leave_callback(self._on_player_leave)
+        self.mcdr_client.set_player_advancement_callback(self._on_player_advancement)
+        self.mcdr_client.set_player_death_callback(self._on_player_death)
         
         # 初始化脚本执行器
         self.script_executor = ScriptExecutor()
         
-        # 注入RCON客户端到所有工具模块
+        # 注入命令执行客户端到所有工具模块
         self._inject_rcon()
         
         # 注册工具到脚本执行器
         self._register_script_tools()
         
-        logger.info(f"MC Manager插件已加载，RCON: {self.config.get('rcon_host')}:{self.config.get('rcon_port')}")
+        logger.info(f"MC Manager插件已加载，MCDR桥接: {self.config.get('mcdr_host', '127.0.0.1')}:{self.config.get('mcdr_port', 25576)}")
     
     async def initialize(self):
         """插件激活时自动调用 - 启动长连接任务"""
-        # 启动日志客户端（包含自动重连功能）
-        if self.log_client:
-            asyncio.create_task(self.log_client.start_listening())
-            logger.info("日志监控已启动（支持自动重连）")
+        # 启动MCDR桥接客户端（包含自动重连功能）
+        asyncio.create_task(self.mcdr_client.start_listening())
+        logger.info("MCDR桥接监听已启动（支持自动重连）")
     
     def _inject_rcon(self):
-        """将RCON客户端注入到所有工具模块"""
+        """将命令执行客户端注入到所有工具模块"""
         player_tools.set_rcon(self.rcon)
         game_tools.set_rcon(self.rcon)
         server_tools.set_rcon(self.rcon)
         server_tools.set_dangerous_commands_enabled(self.enable_dangerous)
         world_tools.set_rcon(self.rcon)
+        player_aliases.set_player_aliases(self.player_aliases)
     
     def _register_script_tools(self):
         """将所有工具函数注册到脚本执行器"""
@@ -136,6 +127,7 @@ class MCManagerPlugin(Star):
         self.script_executor.register_tool("whitelist_list", server_tools.whitelist_list)
         self.script_executor.register_tool("banlist", server_tools.banlist)
         self.script_executor.register_tool("execute_command", server_tools.execute_command)
+        self.script_executor.register_tool("list_player_aliases", player_aliases.list_player_aliases)
         
         # 世界管理工具
         self.script_executor.register_tool("set_weather", world_tools.set_weather)
@@ -158,12 +150,12 @@ class MCManagerPlugin(Star):
         pass
     
     async def _on_log_disconnect(self):
-        """日志服务器断连回调"""
-        logger.warning("与日志服务器的连接已断开")
+        """MCDR桥接断连回调"""
+        logger.warning("与MCDR桥接插件的连接已断开")
     
     async def _on_log_reconnect(self):
-        """日志服务器重连成功回调"""
-        logger.info("已重新连接到日志服务器")
+        """MCDR桥接重连成功回调"""
+        logger.info("已重新连接到MCDR桥接插件")
     
     async def _on_player_join(self, player: str):
         """
@@ -337,10 +329,10 @@ class MCManagerPlugin(Star):
     
     async def terminate(self):
         """插件禁用/重载时自动调用 - 清理资源"""
-        # 断开日志客户端（停止自动重连）
-        if self.log_client:
-            await self.log_client.disconnect(stop_reconnect=True)
-            logger.info("日志监控已停止")
+        # 断开MCDR桥接客户端（停止自动重连）
+        if self.mcdr_client:
+            await self.mcdr_client.disconnect(stop_reconnect=True)
+            logger.info("MCDR桥接监听已停止")
     
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, response: LLMResponse):
@@ -371,7 +363,7 @@ class MCManagerPlugin(Star):
             activated_handlers = event.get_extra("activated_handlers", default=[])
             for handler in activated_handlers:
                 # 排除本插件的handler
-                if not handler.handler_module_path.startswith("astrbot_plugin_mc_manager"):
+                if not handler.handler_module_path.startswith("astrbot_plugin_mcdr_manager"):
                     logger.info(f"MC消息匹配了指令 {handler.handler_full_name}，标记为已发送操作以跳过LLM")
                     # 标记为已有发送操作，让process_stage跳过LLM调用
                     event._has_send_oper = True
@@ -883,7 +875,7 @@ class MCManagerPlugin(Star):
             "游戏操作": ["give_item", "teleport_player", "set_gamemode", "kill_entity",
                        "clear_inventory", "set_experience"],
             "服务器管理": ["list_players", "say_message", "tellraw", "title", "save_world",
-                        "whitelist_list", "banlist", "execute_command"],
+                        "whitelist_list", "banlist", "execute_command", "list_player_aliases"],
             "世界管理": ["set_weather", "set_time", "set_difficulty", "set_gamerule", "summon_entity"]
         }
         
@@ -901,6 +893,14 @@ class MCManagerPlugin(Star):
         result += "await set_weather('clear')  # 设置晴天"
         
         return result
+
+    @filter.llm_tool(name="list_player_aliases")
+    async def tool_list_player_aliases(self, event: AstrMessageEvent) -> str:
+        """列出当前配置的MC玩家别名（无需权限）
+
+        返回玩家真实游戏ID与别名的对应关系。玩家相关工具会自动把别名解析为真实游戏ID。
+        """
+        return await player_aliases.list_player_aliases()
     
     @filter.llm_tool(name="send_to_qq_group")
     async def tool_send_to_qq_group(self, event: AstrMessageEvent, message: str) -> str:
@@ -941,37 +941,33 @@ class MCManagerPlugin(Star):
     
     @filter.command("test_connection")
     async def test_connection(self, event: AstrMessageEvent):
-        '''测试MC服务器RCON连接状态'''
-        logger.info("触发test_connection指令，正在测试RCON连接...")
+        '''测试MCDR桥接连接状态'''
+        logger.info("触发test_connection指令，正在测试MCDR桥接连接...")
         
         try:
             success, message = await self.rcon.test_connection_async()
             if success:
-                result = f"✓ RCON连接成功\n服务器: {self.config.get('rcon_host')}:{self.config.get('rcon_port')}\n{message}"
-                logger.info(f"RCON连接测试成功: {message}")
+                result = f"✓ MCDR桥接连接成功\n服务器: {self.config.get('mcdr_host', '127.0.0.1')}:{self.config.get('mcdr_port', 25576)}\n{message}"
+                logger.info(f"MCDR桥接连接测试成功: {message}")
             else:
-                result = f"✗ RCON连接失败\n服务器: {self.config.get('rcon_host')}:{self.config.get('rcon_port')}\n原因: {message}"
-                logger.warning(f"RCON连接测试失败: {message}")
+                result = f"✗ MCDR桥接连接失败\n服务器: {self.config.get('mcdr_host', '127.0.0.1')}:{self.config.get('mcdr_port', 25576)}\n原因: {message}"
+                logger.warning(f"MCDR桥接连接测试失败: {message}")
         except Exception as e:
-            result = f"✗ RCON连接测试出错\n错误: {str(e)}"
-            logger.error(f"RCON连接测试出错: {str(e)}")
+            result = f"✗ MCDR桥接连接测试出错\n错误: {str(e)}"
+            logger.error(f"MCDR桥接连接测试出错: {str(e)}")
         
         yield event.plain_result(result)
 
     @filter.command("test_log")
     async def cmd_test_log_connection(self, event: AstrMessageEvent):
-        """测试与日志服务器的连接并读取最新一条日志"""
+        """兼容旧命令：测试MCDR桥接连接"""
         has_permission, error_msg = self._check_permission(event)
         if not has_permission:
             yield event.plain_result(error_msg)
             return
-        
-        if not self.log_client:
-            yield event.plain_result("日志监控功能未启用")
-            return
-        
+
         try:
-            success, log_content = await self.log_client.test_connection()
-            yield event.plain_result(log_content)
+            success, message = await self.mcdr_client.test_connection()
+            yield event.plain_result(message)
         except Exception as e:
             yield event.plain_result(f"错误: {e}")

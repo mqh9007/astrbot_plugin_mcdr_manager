@@ -4,25 +4,26 @@
 """
 
 from typing import TYPE_CHECKING
+from .player_aliases import resolve_player_name
 
 if TYPE_CHECKING:
-    from ..rcon_client import MinecraftRCON
+    from ..mcdr_client import MCDRBridgeClient
 
 
-# 全局RCON客户端引用，由main.py注入
-_rcon: "MinecraftRCON" = None
+# 全局命令客户端引用，由main.py注入
+_rcon: "MCDRBridgeClient" = None
 
 
-def set_rcon(rcon: "MinecraftRCON"):
-    """设置RCON客户端"""
+def set_rcon(rcon: "MCDRBridgeClient"):
+    """设置命令客户端"""
     global _rcon
     _rcon = rcon
 
 
-def get_rcon() -> "MinecraftRCON":
-    """获取RCON客户端"""
+def get_rcon() -> "MCDRBridgeClient":
+    """获取命令客户端"""
     if _rcon is None:
-        raise RuntimeError("RCON客户端未初始化")
+        raise RuntimeError("命令客户端未初始化")
     return _rcon
 
 
@@ -41,6 +42,7 @@ async def kick_player(player: str, reason: str = "被管理员踢出") -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     result = await rcon.execute_async(f"kick {player} {reason}")
     return f"踢出玩家 {player}: {result}"
 
@@ -57,6 +59,7 @@ async def ban_player(player: str, reason: str = "违反服务器规则") -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     result = await rcon.execute_async(f"ban {player} {reason}")
     return f"封禁玩家 {player}: {result}"
 
@@ -72,6 +75,7 @@ async def pardon_player(player: str) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     result = await rcon.execute_async(f"pardon {player}")
     return f"解封玩家 {player}: {result}"
 
@@ -87,6 +91,7 @@ async def op_player(player: str) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     result = await rcon.execute_async(f"op {player}")
     return f"给予 {player} OP权限: {result}"
 
@@ -102,6 +107,7 @@ async def deop_player(player: str) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     result = await rcon.execute_async(f"deop {player}")
     return f"移除 {player} 的OP权限: {result}"
 
@@ -117,6 +123,7 @@ async def whitelist_add(player: str) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     result = await rcon.execute_async(f"whitelist add {player}")
     return f"添加 {player} 到白名单: {result}"
 
@@ -132,5 +139,6 @@ async def whitelist_remove(player: str) -> str:
         执行结果信息
     """
     rcon = get_rcon()
+    player = resolve_player_name(player)
     result = await rcon.execute_async(f"whitelist remove {player}")
     return f"从白名单移除 {player}: {result}"
