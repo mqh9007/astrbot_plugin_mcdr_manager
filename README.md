@@ -338,6 +338,11 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 
 ## 📝 更新日志
 
+### v1.4.4
+- 🐛 移除MC消息对 `activated_handlers` 的跳过判断，避免上下文记录类插件导致LLM工具不执行
+- 🐛 增强热重载清理：新实例启动时主动断开旧MCDR桥接客户端并取消旧监听任务
+- 🛡️ 使用跨模块全局去重缓存，降低热重载期间重复MC消息提交概率
+
 ### v1.4.3
 - 🐛 修复AstrBot内置 `main_handle_empty_mention` 被误判为其它插件指令的问题
 - 🐛 修复插件热重载后MCDR监听任务可能残留，导致同一条MC消息重复提交的问题

@@ -7,6 +7,7 @@ same bridge.
 """
 
 import asyncio
+import builtins
 import json
 import time
 import uuid
@@ -55,7 +56,8 @@ class MCDRBridgeClient:
         self._write_lock = asyncio.Lock()
         self._connect_lock = asyncio.Lock()
         self._pending_commands: dict[str, asyncio.Future] = {}
-        self._recent_chat_events: dict[tuple[str, str], float] = {}
+        if not hasattr(builtins, "_astrbot_mcdr_recent_chat_events"):
+            builtins._astrbot_mcdr_recent_chat_events = {}
 
     async def connect(self) -> bool:
         """Connect to the MCDR bridge."""
@@ -254,13 +256,14 @@ class MCDRBridgeClient:
     def _is_duplicate_chat(self, player: str, message: str) -> bool:
         now = time.time()
         key = (player, message)
+        recent_chat_events = builtins._astrbot_mcdr_recent_chat_events
 
-        for old_key, timestamp in list(self._recent_chat_events.items()):
+        for old_key, timestamp in list(recent_chat_events.items()):
             if now - timestamp > 2:
-                self._recent_chat_events.pop(old_key, None)
+                recent_chat_events.pop(old_key, None)
 
-        last_seen = self._recent_chat_events.get(key)
-        self._recent_chat_events[key] = now
+        last_seen = recent_chat_events.get(key)
+        recent_chat_events[key] = now
         return last_seen is not None and now - last_seen < 2
 
     async def _send_json(self, payload: dict):

@@ -4,6 +4,7 @@ AstrBot MC服务器管理插件
 """
 
 import asyncio
+import builtins
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import AstrBotConfig, logger
@@ -17,7 +18,7 @@ from .script_executor import ScriptExecutor
 @register(
     name="astrbot_plugin_mcdr_manager",
     desc="通过LLM智能管理Minecraft服务器",
-    version="1.4.3",
+    version="1.4.4",
     author="AstrBot Community"
 )
 class MCManagerPlugin(Star):
@@ -92,8 +93,34 @@ class MCManagerPlugin(Star):
             logger.warning("MCDR桥接监听任务已存在，跳过重复启动")
             return
 
+        await self._cleanup_previous_bridge_instance()
+        builtins._astrbot_mcdr_bridge_client = self.mcdr_client
+
         self._mcdr_listener_task = asyncio.create_task(self.mcdr_client.start_listening())
+        builtins._astrbot_mcdr_bridge_task = self._mcdr_listener_task
         logger.info("MCDR桥接监听已启动（支持自动重连）")
+
+    async def _cleanup_previous_bridge_instance(self):
+        """Clean up bridge tasks left by hot reloads across module versions."""
+        previous_task = getattr(builtins, "_astrbot_mcdr_bridge_task", None)
+        previous_client = getattr(builtins, "_astrbot_mcdr_bridge_client", None)
+
+        if previous_client and previous_client is not self.mcdr_client:
+            try:
+                await previous_client.disconnect(stop_reconnect=True)
+                logger.info("已断开热重载残留的MCDR桥接客户端")
+            except Exception as e:
+                logger.warning(f"断开热重载残留MCDR桥接客户端失败: {e}")
+
+        if previous_task and previous_task is not self._mcdr_listener_task and not previous_task.done():
+            previous_task.cancel()
+            try:
+                await previous_task
+                logger.info("已取消热重载残留的MCDR监听任务")
+            except asyncio.CancelledError:
+                logger.info("已取消热重载残留的MCDR监听任务")
+            except Exception as e:
+                logger.warning(f"取消热重载残留MCDR监听任务失败: {e}")
     
     def _inject_rcon(self):
         """将命令执行客户端注入到所有工具模块"""
@@ -338,16 +365,22 @@ class MCManagerPlugin(Star):
         if self.mcdr_client:
             await self.mcdr_client.disconnect(stop_reconnect=True)
 
-        if self._mcdr_listener_task and not self._mcdr_listener_task.done():
-            self._mcdr_listener_task.cancel()
+        listener_task = self._mcdr_listener_task
+        if listener_task and not listener_task.done():
+            listener_task.cancel()
             try:
-                await self._mcdr_listener_task
+                await listener_task
             except asyncio.CancelledError:
                 pass
-            self._mcdr_listener_task = None
+        self._mcdr_listener_task = None
 
         if self.mcdr_client:
             logger.info("MCDR桥接监听已停止")
+
+        if getattr(builtins, "_astrbot_mcdr_bridge_client", None) is self.mcdr_client:
+            builtins._astrbot_mcdr_bridge_client = None
+        if getattr(builtins, "_astrbot_mcdr_bridge_task", None) is listener_task:
+            builtins._astrbot_mcdr_bridge_task = None
     
     @filter.on_llm_response()
     async def on_llm_response(self, event: AstrMessageEvent, response: LLMResponse):
@@ -374,25 +407,6 @@ class MCManagerPlugin(Star):
         # 检查是否是MC玩家的消息
         sender_id = event.get_sender_id()
         if sender_id and sender_id.startswith("mc_player_"):
-            # 检查是否有其他插件的handler被激活(表示匹配了明确指令)。
-            # AstrBot内置Agent handler会参与正常LLM工具调用，不能在这里标记为已发送。
-            activated_handlers = event.get_extra("activated_handlers", default=[])
-            for handler in activated_handlers:
-                handler_path = getattr(handler, "handler_module_path", "")
-                handler_name = getattr(handler, "handler_full_name", "")
-
-                if handler_path.startswith("astrbot_plugin_mcdr_manager"):
-                    continue
-                if handler_name.startswith("astrbot.builtin_stars.astrbot."):
-                    logger.debug(f"MC消息命中AstrBot内置handler {handler_name}，继续正常LLM处理")
-                    continue
-
-                if handler_path:
-                    logger.info(f"MC消息匹配了指令 {handler.handler_full_name}，标记为已发送操作以跳过LLM")
-                    # 标记为已有发送操作，让process_stage跳过LLM调用
-                    event._has_send_oper = True
-                    break
-            
             # 获取回复内容
             result = event.get_result()
             if result and result.chain:
