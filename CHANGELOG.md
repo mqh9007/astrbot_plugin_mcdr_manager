@@ -1,5 +1,12 @@
 # 更新日志
 
+## v1.4.8
+
+- 按原版 `astrbot_plugin_mc_manager` 架构恢复 MC 聊天主流程。
+- MC 消息只伪造成 AstrBot 事件，由 AstrBot 框架按 `wake_prefix` 触发原生 LLM 工具调用。
+- 移除手动 Agent、JSON 意图解析和关键词直连兜底对主流程的影响。
+- 保留 MCDR 桥接作为命令执行和 MC 事件来源。
+
 ## v1.4.7
 
 - 将 MC 游戏内命令处理改回 AstrBot Agent 模式。

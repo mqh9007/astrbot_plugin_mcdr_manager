@@ -6,7 +6,7 @@
 
 - 🤖 **自然语言交互**：无需命令前缀，直接与LLM对话即可管理服务器
 - 🎮 **全面管理**：支持玩家管理、游戏操作、服务器管理、世界操作等功能
-- 🧠 **MC Agent模式**：MC玩家唤醒机器人后，LLM会自行调用工具并生成管家式回复
+- 🧠 **原版Agent流程**：MC聊天仍提交给AstrBot框架，由原生LLM工具调用流程解析和回复
 - 🏷️ **玩家别名**：支持为一个MC游戏ID配置多个别名，LLM工具会自动解析
 - 🔒 **权限控制**：支持管理员白名单，确保服务器安全
 - 🌐 **MCDR联动**：通过 MCDR 插件接收聊天/事件并代发服务器命令
@@ -67,8 +67,6 @@
 | `player_aliases` | 玩家别名JSON文本，真实游戏ID对应多个别名 | `{}` |
 | `enable_dangerous_commands` | 启用危险命令（如stop） | `false` |
 | `enable_chat_response` | 将LLM响应发送回MC聊天框 | `true` |
-| `enable_llm_intent_parser` | 启用MC聊天Agent模式，由LLM调用工具并生成回复 | `true` |
-| `llm_intent_provider_id` | 指定MC Agent使用的Provider ID，留空用当前会话模型 | `""` |
 | `bot_nickname` | 在MC中显示的机器人昵称 | `"Bot"` |
 | `enable_unified_context` | 启用MC和QQ群的统一上下文 | `false` |
 | `unified_group_umo` | 统一上下文目标群UMO | `""` |
@@ -84,8 +82,6 @@
   "player_aliases": "{\"doubiev\": [\"豆包\", \"小豆\", \"豆比\"], \"Steve\": [\"史蒂夫\"]}",
   "enable_dangerous_commands": false,
   "enable_chat_response": true,
-  "enable_llm_intent_parser": true,
-  "llm_intent_provider_id": "",
   "bot_nickname": "MC助手",
   "enable_unified_context": false,
   "unified_group_umo": "",
@@ -125,10 +121,10 @@
    - 格式：MC玩家的user_id为 `mc_player_{玩家名}`
 
 2. **在MC中使用**：
-   - 启用 `enable_llm_intent_parser` 后，MC玩家唤醒机器人时会进入AstrBot工具调用Agent
-   - LLM会自行选择工具执行命令，并在工具执行后生成自然语言回复
-   - 普通聊天会继续提交到AstrBot事件链路，由AstrBot的 `wake_prefix` 决定是否触发常规回复
-   - 示例：发送 `派蒙把我t到Alex旁边`，机器人会调用传送工具，并回复类似“好了，已把你传送到Alex旁边”
+   - 所有MC聊天消息都会提交到AstrBot，LLM会看到完整的聊天上下文
+   - 唤醒词在AstrBot的 `wake_prefix` 配置中统一管理（如 `"wake_prefix": ["派蒙"]`）
+   - 只有包含唤醒词的消息才会触发AstrBot原生LLM工具调用流程
+   - 示例：发送 `派蒙把我t到Alex旁边`，机器人会像原插件一样解析意图、调用传送工具并自然回复
 
 **权限校验说明**：
 - QQ消息：使用QQ号校验（如 `"123456789"`）
@@ -338,12 +334,17 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 
 1. 检查AstrBot是否正确配置了LLM提供者
 2. 检查插件配置是否正确
-3. 确认 `enable_llm_intent_parser` 为 `true`
-4. 如果日志出现“MC Agent未找到可用Provider”，请在 `llm_intent_provider_id` 中填写可用的聊天模型Provider ID
-5. 查看AstrBot日志获取详细错误信息
-6. 如果命令没有返回详细输出，在 MCDR 插件配置中保持 `use_rcon_query: true` 并确保 MCDR 自身可用 RCON；否则桥接插件会退回到 `server.execute()`，命令会发出但只能返回“无返回信息”
+3. 确认AstrBot的 `wake_prefix` 包含你在MC里使用的唤醒词
+4. 查看AstrBot日志获取详细错误信息
+5. 如果命令没有返回详细输出，在 MCDR 插件配置中保持 `use_rcon_query: true` 并确保 MCDR 自身可用 RCON；否则桥接插件会退回到 `server.execute()`，命令会发出但只能返回“无返回信息”
 
 ## 📝 更新日志
+
+### v1.4.8
+- 🐛 按原版 `astrbot_plugin_mc_manager` 架构恢复MC聊天主流程
+  - MC消息只伪造成AstrBot事件，由AstrBot框架按 `wake_prefix` 触发原生LLM工具调用
+  - 移除手动Agent、JSON意图解析和关键词直连兜底对主流程的影响
+  - 保留MCDR桥接作为命令执行和MC事件来源
 
 ### v1.4.7
 - ✨ 将MC游戏内命令处理改回AstrBot Agent模式

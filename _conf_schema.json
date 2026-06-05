@@ -62,18 +62,6 @@
     "description": "是否将LLM的响应通过MCDR发送回MC聊天框。所有MC消息会提交到AstrBot框架，由AstrBot的wake_prefix配置控制是否调用LLM",
     "default": true
   },
-  "enable_llm_intent_parser": {
-    "type": "bool",
-    "title": "启用MC聊天Agent模式",
-    "description": "是否让MC玩家唤醒消息进入AstrBot工具调用Agent。启用后LLM会自行调用工具执行命令，并生成自然语言回复",
-    "default": true
-  },
-  "llm_intent_provider_id": {
-    "type": "string",
-    "title": "MC Agent Provider ID",
-    "description": "用于MC聊天Agent的聊天模型Provider ID。留空则使用当前MC会话/统一会话正在使用的模型",
-    "default": ""
-  },
   "bot_nickname": {
     "type": "string",
     "title": "机器人昵称",

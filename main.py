@@ -18,7 +18,7 @@ from .script_executor import ScriptExecutor
 @register(
     name="astrbot_plugin_mcdr_manager",
     desc="通过LLM智能管理Minecraft服务器",
-    version="1.4.7",
+    version="1.4.8",
     author="AstrBot Community"
 )
 class MCManagerPlugin(Star):
@@ -54,10 +54,6 @@ class MCManagerPlugin(Star):
         
         # 是否启用聊天响应
         self.enable_chat_response = self.config.get("enable_chat_response", True)
-
-        # 是否启用MC聊天Agent处理。由LLM决定工具调用，并生成最终自然语言回复。
-        self.enable_llm_intent_parser = self.config.get("enable_llm_intent_parser", True)
-        self.llm_intent_provider_id = self.config.get("llm_intent_provider_id", "")
         
         # 加载机器人昵称配置
         self.bot_nickname = self.config.get("bot_nickname", "Bot")
@@ -258,14 +254,20 @@ class MCManagerPlugin(Star):
             message: 消息内容
         """
         try:
-            if self.enable_llm_intent_parser and await self._try_handle_mc_agent(player, message):
-                return
-
             from astrbot.core.star.star_tools import StarTools
             from astrbot.core.message.components import Plain
             from astrbot.core.platform.astrbot_message import MessageMember
 
-            platform_id, message_type, mc_session_id, group_id = self._get_mc_session_info()
+            # 如果启用了统一上下文且配置了UMO，从UMO中提取session_id
+            # 否则使用默认的 "mc_server_chat"
+            if self.enable_unified_context and self.unified_group_umo:
+                # UMO格式: platform_id:message_type:session_id
+                parts = self.unified_group_umo.split(":")
+                mc_session_id = parts[2] if len(parts) == 3 else "mc_server_chat"
+                group_id = mc_session_id
+            else:
+                mc_session_id = "mc_server_chat"
+                group_id = "mc_server_chat"
             
             # 使用真实的玩家信息
             sender = MessageMember(
@@ -279,7 +281,7 @@ class MCManagerPlugin(Star):
             
             # 创建新消息对象
             new_message = await StarTools.create_message(
-                type=message_type,
+                type="GroupMessage",
                 self_id="astrbot_mc_plugin",
                 session_id=mc_session_id,
                 sender=sender,
@@ -293,7 +295,7 @@ class MCManagerPlugin(Star):
             # - LTM仍然会记录所有消息作为上下文
             await StarTools.create_event(
                 abm=new_message,
-                platform=platform_id,
+                platform="aiocqhttp",
                 is_wake=False
             )
             
@@ -301,189 +303,6 @@ class MCManagerPlugin(Star):
             
         except Exception as e:
             logger.error(f"提交MC消息失败: {e}")
-
-    def _get_mc_session_info(self):
-        """Return platform, message type, session id and group id used by MC fake events."""
-        if self.enable_unified_context and self.unified_group_umo:
-            parts = self.unified_group_umo.split(":")
-            if len(parts) == 3:
-                return parts[0], parts[1], parts[2], parts[2]
-        return "aiocqhttp", "GroupMessage", "mc_server_chat", "mc_server_chat"
-
-    def _get_mc_unified_msg_origin(self) -> str:
-        platform_id, message_type, session_id, _ = self._get_mc_session_info()
-        return f"{platform_id}:{message_type}:{session_id}"
-
-    async def _try_handle_mc_agent(self, player: str, message: str) -> bool:
-        """Run AstrBot's tool-loop agent for woken MC messages."""
-        if not self._is_mc_agent_wake_message(message):
-            return False
-
-        provider_id = str(self.llm_intent_provider_id or "").strip()
-        if not provider_id:
-            try:
-                provider_id = await self.context.get_current_chat_provider_id(self._get_mc_unified_msg_origin())
-            except Exception as e:
-                logger.warning(f"MC Agent未找到可用Provider，回退到AstrBot事件链路: {e}")
-                return False
-
-        tools = self._get_mc_tool_set()
-        if tools.empty():
-            logger.warning("MC Agent没有可用的MC管理工具，回退到AstrBot事件链路")
-            return False
-
-        try:
-            event = await self._create_mc_message_event(player, message, is_wake=True)
-            response = await self.context.tool_loop_agent(
-                event=event,
-                chat_provider_id=provider_id,
-                prompt=message,
-                tools=tools,
-                system_prompt=self._build_mc_agent_system_prompt(player),
-                max_steps=8,
-                tool_call_timeout=self.config.get("mcdr_command_timeout", 10) + 5,
-            )
-            reply = (response.completion_text or "").strip()
-            logger.info(f"MC Agent已完成: [{player}] {message} -> {reply}")
-            if self.enable_chat_response and reply and reply != "*No response*":
-                await self._send_to_mc_chat(reply)
-            return True
-        except Exception as e:
-            logger.error(f"MC Agent执行失败，回退到AstrBot事件链路: {e}")
-            return False
-
-    async def _create_mc_message_event(self, player: str, message: str, is_wake: bool):
-        from astrbot.core.message.components import Plain
-        from astrbot.core.platform.astrbot_message import MessageMember
-        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
-        from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_platform_adapter import AiocqhttpAdapter
-        from astrbot.core.star.star_tools import StarTools
-
-        platform_id, message_type, mc_session_id, group_id = self._get_mc_session_info()
-        sender = MessageMember(
-            user_id=f"mc_player_{player}",
-            nickname=f"{player}(MC)",
-        )
-        new_message = await StarTools.create_message(
-            type=message_type,
-            self_id="astrbot_mc_plugin",
-            session_id=mc_session_id,
-            sender=sender,
-            message=[Plain(message)],
-            message_str=message,
-            group_id=group_id,
-        )
-
-        adapter = next(
-            (p for p in self.context.platform_manager.get_insts() if isinstance(p, AiocqhttpAdapter)),
-            None,
-        )
-        if adapter is None:
-            raise ValueError("未找到适配器: AiocqhttpAdapter")
-
-        event = AiocqhttpMessageEvent(
-            message_str=new_message.message_str,
-            message_obj=new_message,
-            platform_meta=adapter.metadata,
-            session_id=new_message.session_id,
-            bot=adapter.bot,
-        )
-        if platform_id and event.session.platform_name != platform_id:
-            event.session.platform_name = platform_id
-            event.session.platform_id = platform_id
-        event.is_wake = is_wake
-        event.is_at_or_wake_command = is_wake
-        return event
-
-    def _get_mc_tool_set(self):
-        from astrbot.core.agent.tool import ToolSet
-
-        mc_tool_names = {
-            "kick_player",
-            "ban_player",
-            "pardon_player",
-            "op_player",
-            "deop_player",
-            "whitelist_add",
-            "whitelist_remove",
-            "give_item",
-            "teleport_player",
-            "set_gamemode",
-            "kill_entity",
-            "clear_inventory",
-            "set_experience",
-            "list_players",
-            "say_message",
-            "tellraw",
-            "title",
-            "save_world",
-            "whitelist_list",
-            "banlist",
-            "execute_command",
-            "set_weather",
-            "set_time",
-            "set_difficulty",
-            "set_gamerule",
-            "summon_entity",
-            "execute_script",
-            "list_script_tools",
-            "list_player_aliases",
-            "send_to_qq_group",
-        }
-
-        full_tool_set = self.context.get_llm_tool_manager().get_full_tool_set()
-        tool_set = ToolSet()
-        for tool in full_tool_set.tools:
-            if tool.name in mc_tool_names:
-                tool_set.add_tool(tool)
-        return tool_set
-
-    def _is_mc_agent_wake_message(self, message: str) -> bool:
-        prefixes = []
-        try:
-            cfg = self.context.get_config(self._get_mc_unified_msg_origin())
-            provider_settings = cfg.get("provider_settings", {})
-            wake_prefix = provider_settings.get("wake_prefix", "")
-            if isinstance(wake_prefix, str):
-                prefixes.extend([wake_prefix] if wake_prefix else [])
-            elif isinstance(wake_prefix, list):
-                prefixes.extend([str(item) for item in wake_prefix if str(item)])
-        except Exception as e:
-            logger.debug(f"读取MC会话唤醒词失败: {e}")
-
-        if self.bot_nickname:
-            prefixes.append(str(self.bot_nickname))
-
-        prefixes = [prefix for prefix in dict.fromkeys(prefixes) if prefix]
-        if not prefixes:
-            return True
-
-        text = message.strip()
-        return any(text.startswith(prefix) for prefix in prefixes)
-
-    def _build_mc_agent_system_prompt(self, current_player: str) -> str:
-        import json
-
-        aliases = json.dumps(player_aliases.get_player_aliases(), ensure_ascii=False)
-        return f"""
-你是一个Minecraft服务器管家，正在MC游戏内和玩家对话。
-
-当前说话的MC玩家是：{current_player}
-玩家别名JSON：{aliases}
-
-行为要求：
-- 如果玩家要求管理服务器，请主动调用合适的工具完成操作，然后用自然、简短的中文回复玩家。
-- 回复要像管家一样确认结果，例如“已经把时间调到晚上了”“好了，已把你传送到Alex旁边”。
-- 不要把工具返回的原始技术文本逐字复述给玩家。
-- 如果工具结果里出现“无返回信息”“已通过MCDR发送到服务端控制台”，但没有错误，就按命令已发出/已执行来回复。
-- “我”“自己”“我自己”“当前玩家”“@s”都表示当前MC玩家：{current_player}。
-- “t”“tp”“传送”都表示 teleport_player。
-- “把天气调成白天/黑天/晚上/夜晚”这类说法实际是在调时间：白天用 set_time day，黑天/晚上/夜晚用 set_time night。
-- “晴天/下雨/雷暴”才是 set_weather。
-- 玩家名可以使用真实ID或别名，工具会解析别名。
-- 只有管理员才能执行需要权限的管理操作；如果权限不足，请自然说明。
-- 普通聊天可以正常回应，不需要调用工具。
-""".strip()
     
     async def _send_system_event(self, player: str, event_message: str):
         """
@@ -502,7 +321,13 @@ class MCManagerPlugin(Star):
             from astrbot.core.platform.astrbot_message import MessageMember
             
             # 使用相同的session_id确保上下文连续
-            platform_id, message_type, mc_session_id, group_id = self._get_mc_session_info()
+            if self.enable_unified_context and self.unified_group_umo:
+                parts = self.unified_group_umo.split(":")
+                mc_session_id = parts[2] if len(parts) == 3 else "mc_server_chat"
+                group_id = mc_session_id
+            else:
+                mc_session_id = "mc_server_chat"
+                group_id = "mc_server_chat"
             
             # 系统消息使用特殊的sender标识
             sender = MessageMember(
@@ -512,7 +337,7 @@ class MCManagerPlugin(Star):
             
             # 创建系统消息对象
             new_message = await StarTools.create_message(
-                type=message_type,
+                type="GroupMessage",
                 self_id="astrbot_mc_plugin",
                 session_id=mc_session_id,
                 sender=sender,
@@ -524,7 +349,7 @@ class MCManagerPlugin(Star):
             # 提交事件到AstrBot（不触发唤醒，但会记录到LTM）
             await StarTools.create_event(
                 abm=new_message,
-                platform=platform_id,
+                platform="aiocqhttp",
                 is_wake=False
             )
             
@@ -572,9 +397,7 @@ class MCManagerPlugin(Star):
     @filter.on_decorating_result()
     async def on_decorating_result(self, event: AstrMessageEvent):
         """
-        装饰结果钩子,用于:
-        1. 检测MC消息是否匹配了指令,如果是则标记为已发送以跳过LLM
-        2. 拦截MC消息的所有回复并发送到MC聊天框
+        装饰结果钩子，用于拦截MC消息的回复并发送到MC聊天框。
         
         Args:
             event: 消息事件

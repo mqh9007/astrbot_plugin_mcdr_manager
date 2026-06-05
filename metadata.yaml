@@ -4,6 +4,6 @@ short_desc: 通过MCDR桥接智能管理Minecraft服务器
 desc: 通过在QQ群、私聊或MC游戏内与bot对话，基于MCDR桥接智能管理Minecraft服务器
 description: 通过在QQ群、私聊或MC游戏内与bot对话，基于MCDR桥接智能管理Minecraft服务器
 author: Jason.Joestar
-version: 1.4.7
+version: 1.4.8
 repo: https://github.com/mqh9007/astrbot_plugin_mcdr_manager
 astrbot_version: ">=4.17.0"
