@@ -338,6 +338,9 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 
 ## 📝 更新日志
 
+### v1.4.2
+- 🐛 修复MC消息被误判为命中AstrBot内置Agent指令，导致插件LLM工具上下文异常的问题
+
 ### v1.4.1
 - 🐛 修复部分 AstrBot 版本不支持 `_conf_schema.json` 中 `dict` 类型导致插件加载失败的问题
   - `player_aliases` 改为兼容性更好的JSON文本配置

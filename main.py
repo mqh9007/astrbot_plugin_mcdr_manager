@@ -17,7 +17,7 @@ from .script_executor import ScriptExecutor
 @register(
     name="astrbot_plugin_mcdr_manager",
     desc="通过LLM智能管理Minecraft服务器",
-    version="1.4.1",
+    version="1.4.2",
     author="AstrBot Community"
 )
 class MCManagerPlugin(Star):
@@ -359,11 +359,20 @@ class MCManagerPlugin(Star):
         # 检查是否是MC玩家的消息
         sender_id = event.get_sender_id()
         if sender_id and sender_id.startswith("mc_player_"):
-            # 检查是否有其他插件的handler被激活(表示匹配了指令)
+            # 检查是否有其他插件的handler被激活(表示匹配了明确指令)。
+            # AstrBot内置Agent handler会参与正常LLM工具调用，不能在这里标记为已发送。
             activated_handlers = event.get_extra("activated_handlers", default=[])
             for handler in activated_handlers:
-                # 排除本插件的handler
-                if not handler.handler_module_path.startswith("astrbot_plugin_mcdr_manager"):
+                handler_path = getattr(handler, "handler_module_path", "")
+                handler_name = getattr(handler, "handler_full_name", "")
+
+                if handler_path.startswith("astrbot_plugin_mcdr_manager"):
+                    continue
+                if handler_name == "astrbot.builtin_stars.astrbot.main_handle_session_control_agent":
+                    logger.debug("MC消息命中AstrBot内置Agent handler，继续正常LLM工具调用")
+                    continue
+
+                if handler_path:
                     logger.info(f"MC消息匹配了指令 {handler.handler_full_name}，标记为已发送操作以跳过LLM")
                     # 标记为已有发送操作，让process_stage跳过LLM调用
                     event._has_send_oper = True
