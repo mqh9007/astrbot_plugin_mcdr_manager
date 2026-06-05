@@ -5,6 +5,7 @@ AstrBot MC服务器管理插件
 
 import asyncio
 import builtins
+import re
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import AstrBotConfig, logger
@@ -18,7 +19,7 @@ from .script_executor import ScriptExecutor
 @register(
     name="astrbot_plugin_mcdr_manager",
     desc="通过LLM智能管理Minecraft服务器",
-    version="1.4.4",
+    version="1.4.5",
     author="AstrBot Community"
 )
 class MCManagerPlugin(Star):
@@ -254,6 +255,9 @@ class MCManagerPlugin(Star):
             message: 消息内容
         """
         try:
+            if await self._try_handle_mc_direct_command(player, message):
+                return
+
             from astrbot.core.star.star_tools import StarTools
             from astrbot.core.message.components import Plain
             from astrbot.core.platform.astrbot_message import MessageMember
@@ -303,6 +307,114 @@ class MCManagerPlugin(Star):
             
         except Exception as e:
             logger.error(f"提交MC消息失败: {e}")
+
+    async def _try_handle_mc_direct_command(self, player: str, message: str) -> bool:
+        """
+        Best-effort parser for common MC management requests from in-game chat.
+
+        This keeps core server operations usable even when AstrBot's Agent runner
+        does not expose plugin tools to synthetic MC events.
+        """
+        parsed = self._parse_mc_direct_command(message)
+        if not parsed:
+            return False
+
+        action, args = parsed
+        if action != "list_players" and not self.is_admin(f"mc_player_{player}"):
+            await self._send_to_mc_chat(f"权限不足：玩家 {player} 不在管理员列表中")
+            return True
+
+        try:
+            if action == "set_time":
+                result = await world_tools.set_time(args["time"])
+            elif action == "teleport_player":
+                result = await game_tools.teleport_player(args["player"], args["target"])
+            elif action == "set_weather":
+                result = await world_tools.set_weather(args["weather"])
+            elif action == "set_gamemode":
+                result = await game_tools.set_gamemode(args["player"], args["mode"])
+            elif action == "list_players":
+                result = await server_tools.list_players()
+            else:
+                return False
+
+            logger.info(f"MC直连指令已执行: action={action}, args={args}, result={result}")
+            await self._send_to_mc_chat(result)
+            return True
+        except Exception as e:
+            logger.error(f"执行MC直连指令失败: {e}")
+            await self._send_to_mc_chat(f"执行失败: {e}")
+            return True
+
+    def _parse_mc_direct_command(self, message: str):
+        text = message.strip()
+
+        if re.search(r"(在线|有多少人|玩家列表|list)", text, re.IGNORECASE):
+            return "list_players", {}
+
+        time_map = {
+            "黑天": "night",
+            "晚上": "night",
+            "夜晚": "night",
+            "夜里": "night",
+            "白天": "day",
+            "白昼": "day",
+            "天亮": "day",
+            "正午": "noon",
+            "中午": "noon",
+            "午夜": "midnight",
+        }
+        if any(word in text for word in ["时间", "天色", "白天", "黑天", "夜晚", "晚上"]):
+            for keyword, value in time_map.items():
+                if keyword in text:
+                    return "set_time", {"time": value}
+
+        weather_map = {
+            "晴天": "clear",
+            "晴": "clear",
+            "下雨": "rain",
+            "雨天": "rain",
+            "雨": "rain",
+            "雷暴": "thunder",
+            "雷雨": "thunder",
+            "打雷": "thunder",
+        }
+        if any(word in text for word in ["天气", "晴", "雨", "雷"]):
+            for keyword, value in weather_map.items():
+                if keyword in text:
+                    return "set_weather", {"weather": value}
+
+        player_prefix = r"(?:.*?(?:把|将)\s*)?"
+
+        height_match = re.search(player_prefix + r"(?P<player>[\w\u4e00-\u9fff]+)\s*(?:传送|tp|teleport)\s*(?:到|至)\s*(?P<height>-?\d+)\s*(?:格)?(?:高|高度|y)", text, re.IGNORECASE)
+        if height_match:
+            return "teleport_player", {
+                "player": height_match.group("player"),
+                "target": f"~ {height_match.group('height')} ~",
+            }
+
+        coordinate_match = re.search(player_prefix + r"(?P<player>[\w\u4e00-\u9fff]+)\s*(?:传送|tp|teleport)\s*(?:到|至)\s*(?P<x>-?\d+)\s+或?(?P<y>-?\d+)\s+或?(?P<z>-?\d+)", text, re.IGNORECASE)
+        if coordinate_match:
+            return "teleport_player", {
+                "player": coordinate_match.group("player"),
+                "target": f"{coordinate_match.group('x')} {coordinate_match.group('y')} {coordinate_match.group('z')}",
+            }
+
+        tp_match = re.search(player_prefix + r"(?P<player>[\w\u4e00-\u9fff]+)\s*(?:传送|tp|teleport)\s*(?:到|至)\s*(?P<target>[\w\u4e00-\u9fff]+)(?:旁边|身边|那里|那边)?", text, re.IGNORECASE)
+        if tp_match:
+            return "teleport_player", {
+                "player": tp_match.group("player"),
+                "target": tp_match.group("target"),
+            }
+
+        gamemode_match = re.search(player_prefix + r"(?P<player>[\w\u4e00-\u9fff]+)\s*(?:切|改|设|设置|调整).{0,4}(?P<mode>生存|创造|冒险|旁观|survival|creative|adventure|spectator)", text, re.IGNORECASE)
+        if gamemode_match:
+            return "set_gamemode", {
+                "player": gamemode_match.group("player"),
+                "mode": gamemode_match.group("mode"),
+            }
+
+        return None
     
     async def _send_system_event(self, player: str, event_message: str):
         """

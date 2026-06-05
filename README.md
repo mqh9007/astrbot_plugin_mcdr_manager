@@ -338,6 +338,11 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 
 ## 📝 更新日志
 
+### v1.4.5
+- ✨ 增加MC游戏内常用管理请求的直接解析兜底
+  - 支持调时间、传送、天气、游戏模式、查看在线玩家
+  - 当AstrBot Agent未把插件工具暴露给MC伪造事件时，仍可直接执行常见MC操作
+
 ### v1.4.4
 - 🐛 移除MC消息对 `activated_handlers` 的跳过判断，避免上下文记录类插件导致LLM工具不执行
 - 🐛 增强热重载清理：新实例启动时主动断开旧MCDR桥接客户端并取消旧监听任务
