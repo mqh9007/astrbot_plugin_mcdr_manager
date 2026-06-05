@@ -17,7 +17,7 @@ from .script_executor import ScriptExecutor
 @register(
     name="astrbot_plugin_mcdr_manager",
     desc="通过LLM智能管理Minecraft服务器",
-    version="1.4.2",
+    version="1.4.3",
     author="AstrBot Community"
 )
 class MCManagerPlugin(Star):
@@ -72,6 +72,7 @@ class MCManagerPlugin(Star):
         self.mcdr_client.set_player_leave_callback(self._on_player_leave)
         self.mcdr_client.set_player_advancement_callback(self._on_player_advancement)
         self.mcdr_client.set_player_death_callback(self._on_player_death)
+        self._mcdr_listener_task = None
         
         # 初始化脚本执行器
         self.script_executor = ScriptExecutor()
@@ -87,7 +88,11 @@ class MCManagerPlugin(Star):
     async def initialize(self):
         """插件激活时自动调用 - 启动长连接任务"""
         # 启动MCDR桥接客户端（包含自动重连功能）
-        asyncio.create_task(self.mcdr_client.start_listening())
+        if self._mcdr_listener_task and not self._mcdr_listener_task.done():
+            logger.warning("MCDR桥接监听任务已存在，跳过重复启动")
+            return
+
+        self._mcdr_listener_task = asyncio.create_task(self.mcdr_client.start_listening())
         logger.info("MCDR桥接监听已启动（支持自动重连）")
     
     def _inject_rcon(self):
@@ -332,6 +337,16 @@ class MCManagerPlugin(Star):
         # 断开MCDR桥接客户端（停止自动重连）
         if self.mcdr_client:
             await self.mcdr_client.disconnect(stop_reconnect=True)
+
+        if self._mcdr_listener_task and not self._mcdr_listener_task.done():
+            self._mcdr_listener_task.cancel()
+            try:
+                await self._mcdr_listener_task
+            except asyncio.CancelledError:
+                pass
+            self._mcdr_listener_task = None
+
+        if self.mcdr_client:
             logger.info("MCDR桥接监听已停止")
     
     @filter.on_llm_response()
@@ -368,8 +383,8 @@ class MCManagerPlugin(Star):
 
                 if handler_path.startswith("astrbot_plugin_mcdr_manager"):
                     continue
-                if handler_name == "astrbot.builtin_stars.astrbot.main_handle_session_control_agent":
-                    logger.debug("MC消息命中AstrBot内置Agent handler，继续正常LLM工具调用")
+                if handler_name.startswith("astrbot.builtin_stars.astrbot."):
+                    logger.debug(f"MC消息命中AstrBot内置handler {handler_name}，继续正常LLM处理")
                     continue
 
                 if handler_path:

@@ -338,6 +338,11 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 
 ## 📝 更新日志
 
+### v1.4.3
+- 🐛 修复AstrBot内置 `main_handle_empty_mention` 被误判为其它插件指令的问题
+- 🐛 修复插件热重载后MCDR监听任务可能残留，导致同一条MC消息重复提交的问题
+- 🛡️ 增加短时间重复MC聊天事件去重
+
 ### v1.4.2
 - 🐛 修复MC消息被误判为命中AstrBot内置Agent指令，导致插件LLM工具上下文异常的问题
 

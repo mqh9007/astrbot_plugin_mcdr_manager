@@ -55,6 +55,7 @@ class MCDRBridgeClient:
         self._write_lock = asyncio.Lock()
         self._connect_lock = asyncio.Lock()
         self._pending_commands: dict[str, asyncio.Future] = {}
+        self._recent_chat_events: dict[tuple[str, str], float] = {}
 
     async def connect(self) -> bool:
         """Connect to the MCDR bridge."""
@@ -232,6 +233,10 @@ class MCDRBridgeClient:
 
         if event == "chat":
             message = msg.get("message", "")
+            if self._is_duplicate_chat(player, message):
+                logger.debug(f"忽略重复MC聊天事件: <{player}> {message}")
+                return
+
             logger.info(f"[MC聊天] <{player}> {message}")
             if self.fake_event_handler:
                 asyncio.create_task(self.fake_event_handler(player, message))
@@ -245,6 +250,18 @@ class MCDRBridgeClient:
             asyncio.create_task(self.on_player_advancement(player, msg.get("advancement", "")))
         elif event == "death" and self.on_player_death:
             asyncio.create_task(self.on_player_death(player, msg.get("reason", "")))
+
+    def _is_duplicate_chat(self, player: str, message: str) -> bool:
+        now = time.time()
+        key = (player, message)
+
+        for old_key, timestamp in list(self._recent_chat_events.items()):
+            if now - timestamp > 2:
+                self._recent_chat_events.pop(old_key, None)
+
+        last_seen = self._recent_chat_events.get(key)
+        self._recent_chat_events[key] = now
+        return last_seen is not None and now - last_seen < 2
 
     async def _send_json(self, payload: dict):
         if not self.writer:
