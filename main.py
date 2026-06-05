@@ -5,7 +5,7 @@ AstrBot MC服务器管理插件
 
 import asyncio
 import builtins
-import re
+import json
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent, MessageEventResult
 from astrbot.api import AstrBotConfig, logger
@@ -19,7 +19,7 @@ from .script_executor import ScriptExecutor
 @register(
     name="astrbot_plugin_mcdr_manager",
     desc="通过LLM智能管理Minecraft服务器",
-    version="1.4.5",
+    version="1.4.6",
     author="AstrBot Community"
 )
 class MCManagerPlugin(Star):
@@ -55,6 +55,10 @@ class MCManagerPlugin(Star):
         
         # 是否启用聊天响应
         self.enable_chat_response = self.config.get("enable_chat_response", True)
+
+        # 是否启用MC聊天LLM意图解析。用于绕过合成MC事件无法稳定拿到工具集的问题。
+        self.enable_llm_intent_parser = self.config.get("enable_llm_intent_parser", True)
+        self.llm_intent_provider_id = self.config.get("llm_intent_provider_id", "")
         
         # 加载机器人昵称配置
         self.bot_nickname = self.config.get("bot_nickname", "Bot")
@@ -255,23 +259,14 @@ class MCManagerPlugin(Star):
             message: 消息内容
         """
         try:
-            if await self._try_handle_mc_direct_command(player, message):
+            if self.enable_llm_intent_parser and await self._try_handle_mc_llm_intent(player, message):
                 return
 
             from astrbot.core.star.star_tools import StarTools
             from astrbot.core.message.components import Plain
             from astrbot.core.platform.astrbot_message import MessageMember
-            
-            # 如果启用了统一上下文且配置了UMO，从UMO中提取session_id
-            # 否则使用默认的 "mc_server_chat"
-            if self.enable_unified_context and self.unified_group_umo:
-                # UMO格式: platform_id:message_type:session_id
-                parts = self.unified_group_umo.split(":")
-                mc_session_id = parts[2] if len(parts) == 3 else "mc_server_chat"
-                group_id = mc_session_id
-            else:
-                mc_session_id = "mc_server_chat"
-                group_id = "mc_server_chat"
+
+            platform_id, message_type, mc_session_id, group_id = self._get_mc_session_info()
             
             # 使用真实的玩家信息
             sender = MessageMember(
@@ -285,7 +280,7 @@ class MCManagerPlugin(Star):
             
             # 创建新消息对象
             new_message = await StarTools.create_message(
-                type="GroupMessage",
+                type=message_type,
                 self_id="astrbot_mc_plugin",
                 session_id=mc_session_id,
                 sender=sender,
@@ -299,7 +294,7 @@ class MCManagerPlugin(Star):
             # - LTM仍然会记录所有消息作为上下文
             await StarTools.create_event(
                 abm=new_message,
-                platform="aiocqhttp",
+                platform=platform_id,
                 is_wake=False
             )
             
@@ -308,113 +303,169 @@ class MCManagerPlugin(Star):
         except Exception as e:
             logger.error(f"提交MC消息失败: {e}")
 
-    async def _try_handle_mc_direct_command(self, player: str, message: str) -> bool:
-        """
-        Best-effort parser for common MC management requests from in-game chat.
+    def _get_mc_session_info(self):
+        """Return platform, message type, session id and group id used by MC fake events."""
+        if self.enable_unified_context and self.unified_group_umo:
+            parts = self.unified_group_umo.split(":")
+            if len(parts) == 3:
+                return parts[0], parts[1], parts[2], parts[2]
+        return "aiocqhttp", "GroupMessage", "mc_server_chat", "mc_server_chat"
 
-        This keeps core server operations usable even when AstrBot's Agent runner
-        does not expose plugin tools to synthetic MC events.
-        """
-        parsed = self._parse_mc_direct_command(message)
-        if not parsed:
-            return False
+    def _get_mc_unified_msg_origin(self) -> str:
+        platform_id, message_type, session_id, _ = self._get_mc_session_info()
+        return f"{platform_id}:{message_type}:{session_id}"
 
-        action, args = parsed
-        if action != "list_players" and not self.is_admin(f"mc_player_{player}"):
-            await self._send_to_mc_chat(f"权限不足：玩家 {player} 不在管理员列表中")
-            return True
-
-        try:
-            if action == "set_time":
-                result = await world_tools.set_time(args["time"])
-            elif action == "teleport_player":
-                result = await game_tools.teleport_player(args["player"], args["target"])
-            elif action == "set_weather":
-                result = await world_tools.set_weather(args["weather"])
-            elif action == "set_gamemode":
-                result = await game_tools.set_gamemode(args["player"], args["mode"])
-            elif action == "list_players":
-                result = await server_tools.list_players()
-            else:
+    async def _try_handle_mc_llm_intent(self, player: str, message: str) -> bool:
+        """Use the configured LLM to parse MC management intent, then execute local tools."""
+        provider_id = str(self.llm_intent_provider_id or "").strip()
+        if not provider_id:
+            try:
+                provider_id = await self.context.get_current_chat_provider_id(self._get_mc_unified_msg_origin())
+            except Exception as e:
+                logger.warning(f"MC LLM意图解析未找到可用Provider，回退到AstrBot事件链路: {e}")
                 return False
 
-            logger.info(f"MC直连指令已执行: action={action}, args={args}, result={result}")
-            await self._send_to_mc_chat(result)
+        system_prompt = self._build_mc_intent_system_prompt(player)
+        prompt = (
+            f"当前MC玩家: {player}\n"
+            f"玩家消息: {message}\n\n"
+            "请判断这条消息是否要求你管理Minecraft服务器。"
+        )
+
+        try:
+            response = await self.context.llm_generate(
+                chat_provider_id=provider_id,
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0,
+            )
+            raw_text = (response.completion_text or "").strip()
+            payload = self._extract_json_object(raw_text)
+            if not payload:
+                logger.info(f"MC LLM意图解析未返回JSON，回退到AstrBot事件链路: {raw_text}")
+                return False
+
+            intent = json.loads(payload)
+            if not isinstance(intent, dict):
+                return False
+
+            action = str(intent.get("action", "noop")).strip()
+            args = intent.get("args") or {}
+            if not isinstance(args, dict):
+                args = {}
+
+            if action == "noop":
+                logger.info(f"MC LLM意图解析为普通聊天: [{player}] {message}")
+                return False
+
+            result = await self._execute_mc_llm_intent(player, action, args)
+            logger.info(f"MC LLM意图已执行: action={action}, args={args}, result={result}")
+            if self.enable_chat_response and result:
+                await self._send_to_mc_chat(result)
             return True
         except Exception as e:
-            logger.error(f"执行MC直连指令失败: {e}")
-            await self._send_to_mc_chat(f"执行失败: {e}")
-            return True
+            logger.error(f"MC LLM意图解析或执行失败，回退到AstrBot事件链路: {e}")
+            return False
 
-    def _parse_mc_direct_command(self, message: str):
-        text = message.strip()
+    def _build_mc_intent_system_prompt(self, current_player: str) -> str:
+        aliases = json.dumps(player_aliases.get_player_aliases(), ensure_ascii=False)
+        return f"""
+你是Minecraft服务器管理意图解析器。你只输出一个JSON对象，不要输出解释、Markdown或代码块。
 
-        if re.search(r"(在线|有多少人|玩家列表|list)", text, re.IGNORECASE):
-            return "list_players", {}
+如果玩家只是普通聊天、闲聊、吐槽、问候，输出：
+{{"action":"noop","args":{{}}}}
 
-        time_map = {
-            "黑天": "night",
-            "晚上": "night",
-            "夜晚": "night",
-            "夜里": "night",
-            "白天": "day",
-            "白昼": "day",
-            "天亮": "day",
-            "正午": "noon",
-            "中午": "noon",
-            "午夜": "midnight",
-        }
-        if any(word in text for word in ["时间", "天色", "白天", "黑天", "夜晚", "晚上"]):
-            for keyword, value in time_map.items():
-                if keyword in text:
-                    return "set_time", {"time": value}
+如果玩家明确要求管理服务器，从下面动作中选一个：
+- list_players: {{"action":"list_players","args":{{}}}}
+- set_time: {{"action":"set_time","args":{{"time":"day|noon|night|midnight|数字"}}}}
+- set_weather: {{"action":"set_weather","args":{{"weather":"clear|rain|thunder","duration":可选数字}}}}
+- teleport_player: {{"action":"teleport_player","args":{{"player":"玩家名或别名","target":"目标玩家/别名/坐标"}}}}
+- set_gamemode: {{"action":"set_gamemode","args":{{"player":"玩家名或别名","mode":"survival|creative|adventure|spectator"}}}}
+- give_item: {{"action":"give_item","args":{{"player":"玩家名或别名","item":"物品ID","count":数量}}}}
+- kill_entity: {{"action":"kill_entity","args":{{"target":"玩家名/别名/选择器"}}}}
+- clear_inventory: {{"action":"clear_inventory","args":{{"player":"玩家名或别名","item":"可选物品ID"}}}}
+- save_world: {{"action":"save_world","args":{{}}}}
+- execute_command: {{"action":"execute_command","args":{{"command":"不带斜杠的Minecraft命令"}}}}
 
-        weather_map = {
-            "晴天": "clear",
-            "晴": "clear",
-            "下雨": "rain",
-            "雨天": "rain",
-            "雨": "rain",
-            "雷暴": "thunder",
-            "雷雨": "thunder",
-            "打雷": "thunder",
-        }
-        if any(word in text for word in ["天气", "晴", "雨", "雷"]):
-            for keyword, value in weather_map.items():
-                if keyword in text:
-                    return "set_weather", {"weather": value}
+解析规则：
+- “我”“自己”“我自己”“当前玩家”“@s” 都表示当前MC玩家：{current_player}
+- “t”“tp”“传送”都表示 teleport_player。
+- “黑天”“晚上”“夜晚”表示 set_time night，不是天气。
+- “白天”“天亮”表示 set_time day。
+- “晴天/晴朗”表示 set_weather clear；“下雨/雨天”表示 rain；“雷暴/打雷”表示 thunder。
+- 只有当消息有明确管理意图时才输出管理动作；不确定时输出noop。
+- 不要编造玩家ID。可使用已知真实ID或别名，工具会再解析别名。
 
-        player_prefix = r"(?:.*?(?:把|将)\s*)?"
+玩家别名JSON：{aliases}
+""".strip()
 
-        height_match = re.search(player_prefix + r"(?P<player>[\w\u4e00-\u9fff]+)\s*(?:传送|tp|teleport)\s*(?:到|至)\s*(?P<height>-?\d+)\s*(?:格)?(?:高|高度|y)", text, re.IGNORECASE)
-        if height_match:
-            return "teleport_player", {
-                "player": height_match.group("player"),
-                "target": f"~ {height_match.group('height')} ~",
-            }
+    def _extract_json_object(self, text: str) -> str:
+        text = text.strip()
+        if not text:
+            return ""
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].strip().startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end < start:
+            return ""
+        return text[start:end + 1]
 
-        coordinate_match = re.search(player_prefix + r"(?P<player>[\w\u4e00-\u9fff]+)\s*(?:传送|tp|teleport)\s*(?:到|至)\s*(?P<x>-?\d+)\s+或?(?P<y>-?\d+)\s+或?(?P<z>-?\d+)", text, re.IGNORECASE)
-        if coordinate_match:
-            return "teleport_player", {
-                "player": coordinate_match.group("player"),
-                "target": f"{coordinate_match.group('x')} {coordinate_match.group('y')} {coordinate_match.group('z')}",
-            }
+    async def _execute_mc_llm_intent(self, player: str, action: str, args: dict) -> str:
+        if action != "list_players" and not self.is_admin(f"mc_player_{player}"):
+            return f"权限不足：玩家 {player} 不在管理员列表中"
 
-        tp_match = re.search(player_prefix + r"(?P<player>[\w\u4e00-\u9fff]+)\s*(?:传送|tp|teleport)\s*(?:到|至)\s*(?P<target>[\w\u4e00-\u9fff]+)(?:旁边|身边|那里|那边)?", text, re.IGNORECASE)
-        if tp_match:
-            return "teleport_player", {
-                "player": tp_match.group("player"),
-                "target": tp_match.group("target"),
-            }
+        def current_if_self(value):
+            if isinstance(value, str) and value.strip() in ["我", "自己", "我自己", "当前玩家", "@s", "me"]:
+                return player
+            return value
 
-        gamemode_match = re.search(player_prefix + r"(?P<player>[\w\u4e00-\u9fff]+)\s*(?:切|改|设|设置|调整).{0,4}(?P<mode>生存|创造|冒险|旁观|survival|creative|adventure|spectator)", text, re.IGNORECASE)
-        if gamemode_match:
-            return "set_gamemode", {
-                "player": gamemode_match.group("player"),
-                "mode": gamemode_match.group("mode"),
-            }
-
-        return None
+        if action == "set_time":
+            return await world_tools.set_time(str(args.get("time") or args.get("time_value") or ""))
+        if action == "teleport_player":
+            target_player = current_if_self(args.get("player"))
+            target = current_if_self(args.get("target"))
+            if not target_player or not target:
+                return "执行失败：缺少要传送的玩家或目标"
+            return await game_tools.teleport_player(str(target_player), str(target))
+        if action == "set_weather":
+            duration = args.get("duration")
+            return await world_tools.set_weather(str(args.get("weather") or args.get("weather_type") or ""), duration)
+        if action == "set_gamemode":
+            target_player = current_if_self(args.get("player"))
+            if not target_player:
+                return "执行失败：缺少玩家名称"
+            return await game_tools.set_gamemode(str(target_player), str(args.get("mode") or ""))
+        if action == "give_item":
+            target_player = current_if_self(args.get("player"))
+            if not target_player:
+                return "执行失败：缺少玩家名称"
+            return await game_tools.give_item(str(target_player), str(args.get("item") or ""), int(args.get("count") or 1))
+        if action == "kill_entity":
+            target = current_if_self(args.get("target"))
+            if not target:
+                return "执行失败：缺少目标"
+            return await game_tools.kill_entity(str(target))
+        if action == "clear_inventory":
+            target_player = current_if_self(args.get("player"))
+            if not target_player:
+                return "执行失败：缺少玩家名称"
+            return await game_tools.clear_inventory(str(target_player), args.get("item"))
+        if action == "list_players":
+            return await server_tools.list_players()
+        if action == "save_world":
+            return await server_tools.save_world()
+        if action == "execute_command":
+            command = str(args.get("command") or "").lstrip("/")
+            if not command:
+                return "执行失败：缺少命令"
+            return await server_tools.execute_command(command)
+        return f"执行失败：不支持的动作 {action}"
     
     async def _send_system_event(self, player: str, event_message: str):
         """
@@ -433,13 +484,7 @@ class MCManagerPlugin(Star):
             from astrbot.core.platform.astrbot_message import MessageMember
             
             # 使用相同的session_id确保上下文连续
-            if self.enable_unified_context and self.unified_group_umo:
-                parts = self.unified_group_umo.split(":")
-                mc_session_id = parts[2] if len(parts) == 3 else "mc_server_chat"
-                group_id = mc_session_id
-            else:
-                mc_session_id = "mc_server_chat"
-                group_id = "mc_server_chat"
+            platform_id, message_type, mc_session_id, group_id = self._get_mc_session_info()
             
             # 系统消息使用特殊的sender标识
             sender = MessageMember(
@@ -449,7 +494,7 @@ class MCManagerPlugin(Star):
             
             # 创建系统消息对象
             new_message = await StarTools.create_message(
-                type="GroupMessage",
+                type=message_type,
                 self_id="astrbot_mc_plugin",
                 session_id=mc_session_id,
                 sender=sender,
@@ -461,7 +506,7 @@ class MCManagerPlugin(Star):
             # 提交事件到AstrBot（不触发唤醒，但会记录到LTM）
             await StarTools.create_event(
                 abm=new_message,
-                platform="aiocqhttp",
+                platform=platform_id,
                 is_wake=False
             )
             
