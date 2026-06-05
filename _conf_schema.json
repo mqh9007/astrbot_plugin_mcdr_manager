@@ -42,14 +42,13 @@
     "default": []
   },
   "player_aliases": {
-    "type": "dict",
+    "type": "text",
     "title": "玩家别名",
-    "description": "MC玩家真实游戏ID到别名列表的映射，例如 {\"doubiev\": [\"豆包\", \"小豆\"]}。玩家相关工具会自动把别名解析为真实游戏ID",
-    "hint": "键为真实MC游戏ID，值为别名字符串列表。建议使用JSON编辑器维护。",
-    "items": {},
+    "description": "MC玩家真实游戏ID到别名列表的JSON映射，例如 {\"doubiev\": [\"豆包\", \"小豆\"]}。玩家相关工具会自动把别名解析为真实游戏ID",
+    "hint": "请填写JSON对象字符串：键为真实MC游戏ID，值为别名字符串列表。",
     "editor_mode": true,
     "editor_language": "json",
-    "default": {}
+    "default": "{}"
   },
   "enable_dangerous_commands": {
     "type": "bool",

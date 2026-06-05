@@ -7,6 +7,7 @@ Config format:
 }
 """
 
+import json
 from typing import Any
 
 
@@ -86,6 +87,12 @@ async def list_player_aliases() -> str:
 def _normalize_alias_config(aliases: Any) -> dict[str, list[str]]:
     if not aliases:
         return {}
+
+    if isinstance(aliases, str):
+        try:
+            aliases = json.loads(aliases)
+        except json.JSONDecodeError:
+            return {}
 
     if isinstance(aliases, dict):
         items = aliases.items()

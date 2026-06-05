@@ -17,7 +17,7 @@ from .script_executor import ScriptExecutor
 @register(
     name="astrbot_plugin_mcdr_manager",
     desc="通过LLM智能管理Minecraft服务器",
-    version="1.4.0",
+    version="1.4.1",
     author="AstrBot Community"
 )
 class MCManagerPlugin(Star):

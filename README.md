@@ -63,7 +63,7 @@
 | `mcdr_max_reconnect_attempts` | MCDR桥接最大重连次数，0表示无限 | `0` |
 | `mcdr_command_timeout` | 命令等待超时时间 | `10` |
 | `admin_ids` | 管理员ID列表（QQ号或MC玩家名） | `[]`（空表示所有人可用） |
-| `player_aliases` | 玩家别名映射，真实游戏ID对应多个别名 | `{}` |
+| `player_aliases` | 玩家别名JSON文本，真实游戏ID对应多个别名 | `{}` |
 | `enable_dangerous_commands` | 启用危险命令（如stop） | `false` |
 | `enable_chat_response` | 将LLM响应发送回MC聊天框 | `true` |
 | `bot_nickname` | 在MC中显示的机器人昵称 | `"Bot"` |
@@ -78,10 +78,7 @@
   "mcdr_port": 25576,
   "mcdr_token": "",
   "admin_ids": ["123456789", "Steve", "Alex"],
-  "player_aliases": {
-    "doubiev": ["豆包", "小豆", "豆比"],
-    "Steve": ["史蒂夫"]
-  },
+  "player_aliases": "{\"doubiev\": [\"豆包\", \"小豆\", \"豆比\"], \"Steve\": [\"史蒂夫\"]}",
   "enable_dangerous_commands": false,
   "enable_chat_response": true,
   "bot_nickname": "MC助手",
@@ -93,15 +90,13 @@
 
 ### 玩家别名
 
-`player_aliases` 用真实 MC 游戏ID作为键，值为该玩家的别名列表。配置后，玩家相关工具会自动把别名解析为真实游戏ID。
+`player_aliases` 是一段JSON文本，用真实 MC 游戏ID作为键，值为该玩家的别名列表。配置后，玩家相关工具会自动把别名解析为真实游戏ID。
 
 例如玩家游戏ID为 `doubiev`：
 
 ```json
 {
-  "player_aliases": {
-    "doubiev": ["豆包", "小豆", "豆比"]
-  }
+  "doubiev": ["豆包", "小豆", "豆比"]
 }
 ```
 
@@ -342,6 +337,10 @@ Bot: 设置游戏规则 keepInventory = true: Gamerule keepInventory is now set 
 4. 如果命令没有返回详细输出，在 MCDR 插件配置中保持 `use_rcon_query: true` 并确保 MCDR 自身可用 RCON；否则桥接插件会退回到 `server.execute()`，命令会发出但只能返回“无返回信息”
 
 ## 📝 更新日志
+
+### v1.4.1
+- 🐛 修复部分 AstrBot 版本不支持 `_conf_schema.json` 中 `dict` 类型导致插件加载失败的问题
+  - `player_aliases` 改为兼容性更好的JSON文本配置
 
 ### v1.4.0
 - ✨ 新增玩家别名功能
